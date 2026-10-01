@@ -1,6 +1,10 @@
-# OpenClaw Railway Template (1‑click deploy)
+# Starlight OpenClaw Kit for Railway
 
-This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
+Give an agent a useful first job: turn approved sources into an evidence brief you can act on.
+
+This is the **Starlight-maintained fork** of [Vignesh N's OpenClaw Railway template](https://github.com/vignesh07/clawdbot-railway-template). The upstream wrapper supplies the password-protected setup wizard, persistent Gateway and backup flow. Starlight adds a versioned evidence briefing workflow, separate personality references and an offline install/export CLI. The original [MIT license](LICENSE) and copyright are preserved; the new pack includes its own MIT notice.
+
+**Status:** implemented with local tests and CI configuration; no Starlight-owned marketplace template, live deployment, paid outcome or current Hermes compatibility is established by this repository. The Dockerfile currently pins OpenClaw `v2026.2.9`; a current-runtime rebase and isolated cloud smoke test remain release gates. This fork is independently maintained, without implied OpenClaw or Railway endorsement.
 
 ## What you get
 
@@ -9,6 +13,19 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
+- **Evidence briefing skill** with dated sources, uncertainty and a concrete next action
+- **Offline pack CLI** with content hashes, immutable version receipts, deterministic export and guarded installation
+- **Optional personality references** that stay separate from runtime permission controls
+
+## Try the first job
+
+```bash
+node scripts/agent-pack.js verify
+node scripts/agent-pack.js install --workspace /absolute/path/to/your/workspace
+node scripts/agent-pack.js export --output /tmp/starlight-evidence-brief-1.0.0.json
+```
+
+The installer adds one versioned skill and leaves existing workspace profiles alone. Use a reviewed git revision. Give the agent a decision and approved source list; the skill returns a private evidence brief. It does not schedule jobs, configure credentials, send messages or provision infrastructure. Read [the pack contract and installation boundary](docs/AGENT-PACKS.md).
 
 ## How it works (high level)
 
@@ -17,7 +34,11 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - During setup, the wrapper runs `openclaw onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
 - After setup, **`/` is OpenClaw**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
 
-## Railway deploy instructions (what you’ll publish as a Template)
+## Railway deployment and template preparation
+
+Current Railway project configuration is authored in [`.railway/railway.ts`](.railway/railway.ts). The legacy `railway.toml` has been removed: Railway documents a 2026-12-01 cutoff for existing Config as Code and disallows it for new services. **Before changing an existing service, follow [the migration and persistence gate](docs/RAILWAY-MIGRATION.md)**. The starter must be adapted to its real service and volume names. Removing the old file does not automatically apply IaC.
+
+The following composer flow prepares a future template; it does not mean this fork has a published deploy link:
 
 In Railway Template Composer:
 
@@ -47,14 +68,15 @@ Then:
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
 
-## Support / community
+## Support and attribution
 
-- GitHub Issues: https://github.com/vignesh07/clawdbot-railway-template/issues
-- Discord: https://discord.com/invite/clawd
+- This fork's issues: https://github.com/frankxai/openclaw-acos-skills-railway-template/issues
+- Upstream wrapper: https://github.com/vignesh07/clawdbot-railway-template
+- OpenClaw documentation: https://docs.openclaw.ai
 
-If you’re filing a bug, please include the output of:
+For a bug report, include a redacted description of:
 - `/healthz`
-- `/setup/api/debug` (after authenticating to /setup)
+- `/setup/api/debug` (after authenticating to /setup; remove tokens and private configuration)
 
 ## Getting chat tokens (so you don’t have to scramble)
 
@@ -174,18 +196,6 @@ docker run --rm -p 8080:8080 \
 
 ---
 
-## Official template / endorsements
+## Upstream lineage
 
-- Officially recommended by OpenClaw: <https://docs.openclaw.ai/railway>
-- Railway announcement (official): [Railway tweet announcing 1‑click OpenClaw deploy](https://x.com/railway/status/2015534958925013438)
-
-  ![Railway official tweet screenshot](assets/railway-official-tweet.jpg)
-
-- Endorsement from Railway CEO: [Jake Cooper tweet endorsing the OpenClaw Railway template](https://x.com/justjake/status/2015536083514405182)
-
-  ![Jake Cooper endorsement tweet screenshot](assets/railway-ceo-endorsement.jpg)
-
-- Created and maintained by **Vignesh N (@vignesh07)**
-- **1800+ deploys on Railway and counting** [Link to template on Railway](https://railway.com/deploy/clawdbot-railway-template)
-
-![Railway template deploy count](assets/railway-deploys.jpg)
+The setup wrapper was created by **Vignesh N (@vignesh07)** and is reused under MIT. Historical upstream announcement screenshots in `assets/` refer to that original project. They are not evidence of endorsement, adoption or deployment counts for the Starlight fork. Contributions to this fork are tracked through its own issues and reviewed revisions.

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "starlight-evidence-brief",
+  "version": "1.0.0",
+  "skillName": "starlight-evidence-brief-1-0-0",
+  "license": "MIT",
+  "repository": "https://github.com/frankxai/openclaw-acos-skills-railway-template",
+  "voiceReference": "frankxai/starlight-design-intelligence@3d6fc8fdd38b5db69a16db1078e30d454e891af1",
+  "files": [
+    {
+      "path": "LICENSE.md",
+      "bytes": 1069,
+      "sha256": "fa67d4783e083ed4a530ea98c21db36ffacfc4a5f16c85b1d6b2e8d6ae666d57"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 3382,
+      "sha256": "acc6f861dcb94a0683030fe13d23c72b59515180cd1af9793762a0ad9c5e3606"
+    },
+    {
+      "path": "profiles/IDENTITY.md",
+      "bytes": 462,
+      "sha256": "be681990b633b4159e746fbe0c01aabb36ce516d673ca504b168e367b196c077"
+    },
+    {
+      "path": "profiles/PERMISSIONS.md",
+      "bytes": 1099,
+      "sha256": "0efca61d835fc2658c0a8501dc1c8969fb24278fe68931dd51e8dae7dc61512d"
+    },
+    {
+      "path": "profiles/SOUL.md",
+      "bytes": 944,
+      "sha256": "df74c12c4789f4e9c1bafbdc99e7d54dcf2b5055481ba51604a4e01fec4a332e"
+    },
+    {
+      "path": "references/brief-template.md",
+      "bytes": 675,
+      "sha256": "f8a2f0c6086e7807b7be0270da817c1056519bb5107689071936ca5a95a536ab"
+    },
+    {
+      "path": "references/evaluation-fixtures.json",
+      "bytes": 2726,
+      "sha256": "d4ce044a3771f264f3cf99720df712d194b9682f31f4f9b4d6426421e29315a6"
+    },
+    {
+      "path": "references/job-contract.json",
+      "bytes": 887,
+      "sha256": "c5ce611df1439157f068640e456916d0657f4eb794c73f77b793c4f3db1692b4"
+    }
+  ]
+}
