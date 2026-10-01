@@ -66,8 +66,8 @@ ENV PATH="/data/npm/bin:/data/pnpm:${PATH}"
 WORKDIR /app
 
 # Wrapper deps
-COPY package.json ./
-RUN npm install --omit=dev && npm cache clean --force
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built openclaw
 COPY --from=openclaw-build /openclaw /openclaw
@@ -77,6 +77,8 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
   && chmod +x /usr/local/bin/openclaw
 
 COPY src ./src
+COPY scripts ./scripts
+COPY packs ./packs
 
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.

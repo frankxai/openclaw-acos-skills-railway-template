@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "job": "evidence-brief",
+  "requiredInputs": ["decision", "approvedSources"],
+  "defaults": {
+    "audience": "workspace owner",
+    "delivery": "private draft in current conversation",
+    "freshnessDays": 7,
+    "timeBudgetMinutes": 10,
+    "maximumConsequentialClaims": 8,
+    "maximumSourceReads": 12
+  },
+  "claimStatuses": ["documented", "observed", "inference", "unknown"],
+  "productStatuses": ["proposed", "implemented", "tested", "deployed", "operating", "customer-validated"],
+  "requiredOutput": ["decision", "evidence", "uncertainty", "nextAction", "usage"],
+  "failureBehavior": "Return a private partial brief with missing sources or tools named. Never invent retrieval or execution.",
+  "defaultSideEffects": [],
+  "enforcement": "Instructional contract only. Runtime tool policy, identity, data access and budgets are configured separately."
+}
