@@ -249,6 +249,14 @@ async function restartGateway() {
   return ensureGatewayRunning();
 }
 
+function hasSetupAuthorization(req) {
+  const [scheme, encoded] = (req.headers.authorization || "").split(" ");
+  if (scheme !== "Basic" || !encoded) return false;
+  const decoded = Buffer.from(encoded, "base64").toString("utf8");
+  const idx = decoded.indexOf(":");
+  return idx >= 0 && decoded.slice(idx + 1) === SETUP_PASSWORD;
+}
+
 function requireSetupAuth(req, res, next) {
   if (!SETUP_PASSWORD) {
     return res
@@ -260,18 +268,9 @@ function requireSetupAuth(req, res, next) {
     return res.status(503).type("text/plain").send("Set distinct SETUP_PASSWORD and OPENCLAW_GATEWAY_TOKEN deployment secrets before using /setup.");
   }
 
-  const header = req.headers.authorization || "";
-  const [scheme, encoded] = header.split(" ");
-  if (scheme !== "Basic" || !encoded) {
+  if (!hasSetupAuthorization(req)) {
     res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
     return res.status(401).send("Auth required");
-  }
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const idx = decoded.indexOf(":");
-  const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-  if (password !== SETUP_PASSWORD) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
-    return res.status(401).send("Invalid password");
   }
   return next();
 }
@@ -1317,12 +1316,12 @@ function attachGatewayAuthHeader(req) {
   // The Control UI running in the browser cannot set custom Authorization headers for WebSocket
   // connections, so we terminate auth at the wrapper by injecting the token into proxied
   // requests.
-  if (!req?.headers?.authorization && OPENCLAW_GATEWAY_TOKEN) {
+  if (OPENCLAW_GATEWAY_TOKEN) {
     req.headers.authorization = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
   }
 }
 
-app.use(async (req, res) => {
+app.use(requireSetupAuth, async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
     return res.redirect("/setup");
@@ -1402,6 +1401,10 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
 });
 
 server.on("upgrade", async (req, socket, head) => {
+  if (!hasDistinctSetupSecrets() || !hasSetupAuthorization(req)) {
+    socket.end('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="OpenClaw Setup"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    return;
+  }
   if (!isConfigured()) {
     socket.destroy();
     return;
