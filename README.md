@@ -4,7 +4,7 @@ Give an agent a useful first job: turn approved sources into an evidence brief y
 
 This is the **Starlight-maintained fork** of [Vignesh N's OpenClaw Railway template](https://github.com/vignesh07/clawdbot-railway-template). The upstream wrapper supplies the password-protected setup wizard, persistent Gateway and backup flow. Starlight adds a versioned evidence briefing workflow, separate personality references and an offline install/export CLI. The original [MIT license](LICENSE) and copyright are preserved; the new pack includes its own MIT notice.
 
-**Status:** implemented with local tests and CI configuration; no Starlight-owned marketplace template, live deployment, paid outcome or current Hermes compatibility is established by this repository. The Dockerfile currently pins OpenClaw `v2026.2.9`; a current-runtime rebase and isolated cloud smoke test remain release gates. This fork is independently maintained, without implied OpenClaw or Railway endorsement.
+**Status:** a reviewable source kit with local tests and an isolated Docker build/smoke; no Starlight-owned marketplace template, live deployment, paid outcome or current Hermes compatibility is established by this repository. The image now pins OpenClaw `v2026.9.8` on Node 24, which satisfies the upstream runtime check. This fork is independently maintained, without implied OpenClaw or Railway endorsement.
 
 ## What you get
 
