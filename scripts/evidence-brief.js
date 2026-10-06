@@ -8,6 +8,8 @@ const MAX_SOURCE_BYTES = 256 * 1024;
 const MAX_TOTAL_SOURCE_BYTES = 1024 * 1024;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
+const MAX_RESPONSE_BYTES = 256 * 1024;
+const RUN_LOCK = ".brief-run.lock";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const TEMPLATE_DIR = fileURLToPath(new URL("./brief-templates/", import.meta.url));
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
@@ -140,6 +142,28 @@ function writeReceipt(root, receipt) {
   writeAtomic(root, "receipt.json", `${JSON.stringify(receipt, null, 2)}\n`);
 }
 
+function acquireJobLock(root) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(path.join(root, RUN_LOCK), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  } catch (error) {
+    if (error.code === "EEXIST") fail("Job is locked by an active or interrupted runner; confirm all runners stopped before removing the lock");
+    throw error;
+  }
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`);
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    fs.closeSync(descriptor);
+    fs.unlinkSync(path.join(root, RUN_LOCK));
+    throw error;
+  }
+  return () => {
+    fs.closeSync(descriptor);
+    fs.unlinkSync(path.join(root, RUN_LOCK));
+  };
+}
+
 function readInputs(root) {
   const mission = readText(root, "mission.md", MAX_MISSION_BYTES).trim();
   if (!mission || mission.includes("<write your decision here>")) fail("Edit mission.md before running a brief");
@@ -223,7 +247,7 @@ function timeoutMs() {
   return value;
 }
 
-async function requestOpenAI(prompt, signal) {
+export async function requestOpenAI(prompt, signal) {
   const key = process.env.OPENAI_API_KEY;
   const model = process.env.EVIDENCE_BRIEF_MODEL;
   if (!key) {
@@ -253,7 +277,6 @@ async function requestOpenAI(prompt, signal) {
         { role: "user", content: prompt },
       ],
       max_completion_tokens: 2500,
-      temperature: 0.2,
     }),
   });
   if (!response.ok) {
@@ -263,10 +286,24 @@ async function requestOpenAI(prompt, signal) {
     throw error;
   }
   let data;
+  const reader = response.body?.getReader();
+  if (!reader) fail("Provider returned an invalid response");
+  const chunks = [];
+  let bytes = 0;
   try {
-    data = await response.json();
-  } catch {
-    fail("Provider returned an invalid response");
+    while (true) {
+      signal.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) fail("Provider response exceeds its transport limit");
+      chunks.push(value);
+    }
+    signal.throwIfAborted();
+    data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string" || !content.trim() || Buffer.byteLength(content) > MAX_OUTPUT_BYTES) {
@@ -276,6 +313,7 @@ async function requestOpenAI(prompt, signal) {
     content,
     model: typeof data.model === "string" ? data.model : model,
     usage: data.usage,
+    finishReason: data?.choices?.[0]?.finish_reason ?? "unknown",
   };
 }
 
@@ -299,7 +337,18 @@ export function initializeJob(directory) {
   return { jobDirectory: root, status: "ready", editable: ["mission.md", "sources.json", "sources/approved-release.md"] };
 }
 
-export async function runJob(directory, {
+export async function runJob(directory, options = {}) {
+  const root = checkedDirectory(directory);
+  assertNoCredentialMaterial(options.intervention ?? "");
+  const release = acquireJobLock(root);
+  try {
+    return await runUnlocked(root, options);
+  } finally {
+    release();
+  }
+}
+
+async function runUnlocked(directory, {
   retry = false,
   intervention = "",
   request = requestOpenAI,
@@ -349,6 +398,8 @@ export async function runJob(directory, {
     };
   }
 
+  if (fs.existsSync(path.join(root, "draft.md"))) fail("An interrupted draft already exists; use recover with an intervention note instead of another provider request");
+
   if (intervention.trim()) receipt.interventions.push({ at: now(), note: intervention.trim().slice(0, 1000) });
   const attempt = {
     number: receipt.attempts.length + 1,
@@ -370,16 +421,19 @@ export async function runJob(directory, {
   const timeoutSignal = AbortSignal.timeout(timeout);
   const signal = outerSignal ? AbortSignal.any([outerSignal, timeoutSignal]) : timeoutSignal;
   try {
+    signal.throwIfAborted();
     const result = await request(promptFor(input), signal);
+    attempt.model = result.model || attempt.model;
+    attempt.usage = summarizeUsage(result.usage);
+    signal.throwIfAborted();
     const content = result.content.trim();
     assertNoCredentialMaterial(content);
     const available = new Set(input.sources.map((source) => source.id));
     const cited = [...content.matchAll(/\[(S[A-Za-z0-9_-]{0,30})\]/g)].map((match) => match[1]);
     const invalidCitations = [...new Set(cited.filter((id) => !available.has(id)))];
     writeAtomic(root, "draft.md", `${content}\n`, { exclusive: true });
-    attempt.status = invalidCitations.length || cited.length === 0 ? "needs_review" : "completed";
-    attempt.model = result.model || attempt.model;
-    attempt.usage = summarizeUsage(result.usage);
+    attempt.finishReason = result.finishReason ?? "unknown";
+    attempt.status = invalidCitations.length || cited.length === 0 || (result.finishReason && result.finishReason !== "stop") ? "needs_review" : "completed";
     attempt.invalidCitations = invalidCitations;
     attempt.citationCheck = { found: [...new Set(cited)], allKnown: invalidCitations.length === 0 };
     receipt.status = attempt.status;
@@ -407,9 +461,15 @@ export async function runJob(directory, {
 
 export function acceptDraft(directory, note = "") {
   const root = checkedDirectory(directory);
+  const release = acquireJobLock(root);
+  try { return acceptUnlocked(root, note); } finally { release(); }
+}
+
+function acceptUnlocked(root, note) {
   assertNoCredentialMaterial(note);
   const receipt = JSON.parse(readText(root, "receipt.json", 256 * 1024));
-  if (!["completed", "needs_review"].includes(receipt.status)) fail("Only a completed draft can be accepted");
+  if (!["completed", "needs_review", "accepted"].includes(receipt.status)) fail("Only a completed draft can be accepted");
+  if (receipt.attempts?.at(-1)?.inputDigest !== readInputs(root).inputDigest) fail("Inputs changed since the last attempt; create a new job before acceptance");
   const draft = readText(root, "draft.md", MAX_OUTPUT_BYTES);
   receipt.status = "accepted";
   receipt.humanAcceptance = {
@@ -422,10 +482,51 @@ export function acceptDraft(directory, note = "") {
   return { jobDirectory: root, status: "accepted", receipt: path.join(root, "receipt.json") };
 }
 
+export function recoverDraft(directory, note = "") {
+  const root = checkedDirectory(directory);
+  const release = acquireJobLock(root);
+  try { return recoverUnlocked(root, note); } finally { release(); }
+}
+
+function recoverUnlocked(root, note) {
+  assertNoCredentialMaterial(note);
+  if (!note.trim()) fail("Recovery requires an intervention note after confirming the prior runner stopped");
+  const receipt = JSON.parse(readText(root, "receipt.json", 256 * 1024));
+  const attempt = receipt.attempts?.at(-1);
+  if (receipt.schemaVersion !== 1 || !["running", "interrupted", "error"].includes(receipt.status) || !attempt) fail("Only an interrupted draft can be recovered");
+  if (attempt.inputDigest !== readInputs(root).inputDigest) fail("Inputs changed; preserve the interrupted job instead of accepting mismatched output");
+  // Exclusive publication links a private temporary file before removing that link.
+  // A crash in that gap must not be mistaken for an external hardlink to private data.
+  const draftPath = relativeFile(root, "draft.md");
+  const stat = fs.lstatSync(draftPath);
+  if (stat.nlink > 1) {
+    const pendingLinks = fs.readdirSync(root).filter(name => /^\.brief-[a-f0-9]{24}\.tmp$/.test(name)).filter(name => {
+      const candidate = fs.lstatSync(path.join(root, name));
+      return candidate.isFile() && candidate.uid === process.getuid() && candidate.dev === stat.dev && candidate.ino === stat.ino;
+    });
+    if (stat.nlink !== pendingLinks.length + 1) fail("Interrupted draft has external hardlinks; preserve it for manual review");
+    for (const name of pendingLinks) fs.unlinkSync(path.join(root, name));
+  }
+  const draft = readText(root, "draft.md", MAX_OUTPUT_BYTES);
+  if (!draft.trim()) fail("Interrupted draft is empty");
+  const at = new Date().toISOString();
+  attempt.recovery = { at, previousStatus: attempt.status, outputProvenance: "draft survived receipt interruption; provider termination and usage may be unknown" };
+  attempt.status = "needs_review";
+  attempt.endedAt ??= at;
+  receipt.status = "needs_review";
+  receipt.interventions ??= [];
+  receipt.interventions.push({ at, note: note.trim().slice(0, 1000) });
+  receipt.output = { path: "draft.md", sha256: sha256(draft), editable: true };
+  receipt.humanAcceptance = { status: "pending" };
+  writeReceipt(root, receipt);
+  return { jobDirectory: root, status: "needs_review", receipt: path.join(root, "receipt.json"), output: "draft.md" };
+}
+
 function collectJobFiles(root, prefix = "") {
   const files = [];
   for (const entry of fs.readdirSync(path.join(root, prefix), { withFileTypes: true })) {
     const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (name === RUN_LOCK) continue;
     const absolute = path.join(root, name);
     if (entry.isSymbolicLink()) fail("Symlinks are forbidden in evidence job exports");
     if (entry.isDirectory()) {
@@ -445,12 +546,20 @@ function collectJobFiles(root, prefix = "") {
 
 export function exportJob(directory, output) {
   const root = checkedDirectory(directory);
+  const release = acquireJobLock(root);
+  try { return exportUnlocked(root, output); } finally { release(); }
+}
+
+function exportUnlocked(root, output) {
   const inputs = readInputs(root);
   if (fs.existsSync(path.join(root, "receipt.json"))) {
     const receipt = JSON.parse(readText(root, "receipt.json", 256 * 1024));
     if (!receipt || receipt.schemaVersion !== 1 || !Array.isArray(receipt.attempts)) fail("Invalid job receipt");
     if (receipt.attempts.at(-1)?.inputDigest && receipt.attempts.at(-1).inputDigest !== inputs.inputDigest) {
       fail("Inputs changed since the last attempt; export a new job instead of a mismatched receipt");
+    }
+    if (receipt.status === "accepted" && receipt.humanAcceptance?.draftSha256 !== sha256(readText(root, "draft.md", MAX_OUTPUT_BYTES))) {
+      fail("Draft changed after acceptance; review and accept the changed draft before export");
     }
   }
   const files = collectJobFiles(root).map((name) => ({
@@ -536,6 +645,7 @@ Usage:
   node scripts/evidence-brief.js init --job DIRECTORY
   node scripts/evidence-brief.js run --job DIRECTORY [--retry --intervention NOTE]
   node scripts/evidence-brief.js accept --job DIRECTORY [--note NOTE]
+  node scripts/evidence-brief.js recover --job DIRECTORY --intervention NOTE
   node scripts/evidence-brief.js export --job DIRECTORY --output FILE
   node scripts/evidence-brief.js restore --bundle FILE --job DIRECTORY
 
@@ -550,11 +660,12 @@ async function main() {
     printHelp();
   } else {
     const command = args.shift();
-    if (!["init", "run", "accept", "export", "restore"].includes(command)) fail("Unknown command; use --help");
+    if (!["init", "run", "accept", "recover", "export", "restore"].includes(command)) fail("Unknown command; use --help");
     const options = {};
     const allowed = command === "init" || command === "accept" ? ["--job", "--note"]
       : command === "run" ? ["--job", "--retry", "--intervention"]
-        : command === "export" ? ["--job", "--output"] : ["--job", "--bundle"];
+        : command === "recover" ? ["--job", "--intervention"]
+          : command === "export" ? ["--job", "--output"] : ["--job", "--bundle"];
     while (args.length) {
       const key = args.shift();
       if (key === "--retry" && command === "run") {
@@ -573,6 +684,7 @@ async function main() {
         intervention: options["--intervention"] ?? "",
       })
         : command === "accept" ? acceptDraft(options["--job"], options["--note"] ?? "")
+          : command === "recover" ? recoverDraft(options["--job"], options["--intervention"] ?? "")
           : command === "export" ? exportJob(options["--job"], options["--output"])
             : restoreJob(options["--bundle"], options["--job"]);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

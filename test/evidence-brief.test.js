@@ -7,6 +7,8 @@ import {
   acceptDraft,
   exportJob,
   initializeJob,
+  requestOpenAI,
+  recoverDraft,
   restoreJob,
   runJob,
 } from "../scripts/evidence-brief.js";
@@ -175,4 +177,119 @@ test("credential-like source material is neither sent to the model nor exported"
   await assert.rejects(runJob(root, { request: async () => { calls++; return response(); } }), /Credential-like material/);
   assert.equal(calls, 0);
   assert.throws(() => exportJob(root, path.join(temporary(t), "bundle.json")), /Credential-like material/);
+});
+
+test("late completion after cancellation does not create a draft", async (t) => {
+  const root = job(t);
+  const controller = new AbortController();
+  const result = await runJob(root, { signal: controller.signal, request: async () => {
+    controller.abort();
+    return response();
+  } });
+  assert.equal(result.status, "cancelled");
+  assert.equal(fs.existsSync(path.join(root, "draft.md")), false);
+});
+
+test("a second runner cannot interrupt or retry an active request", async (t) => {
+  const root = job(t);
+  let finish;
+  const pending = runJob(root, { request: () => new Promise(resolve => { finish = resolve; }) });
+  const before = fs.readFileSync(path.join(root, "receipt.json"), "utf8");
+  try {
+    await assert.rejects(runJob(root, { retry: true, intervention: "Retry", request: response }), /active|locked/i);
+    assert.equal(fs.readFileSync(path.join(root, "receipt.json"), "utf8"), before);
+  } finally {
+    finish(await response());
+    await pending;
+  }
+});
+
+test("credential-like retry notes are denied before mutating the receipt or invoking a provider", async (t) => {
+  const root = job(t);
+  await runJob(root, { request: async () => { throw new Error("fixture"); } });
+  const before = fs.readFileSync(path.join(root, "receipt.json"), "utf8");
+  let calls = 0;
+  await assert.rejects(runJob(root, { retry: true, intervention: `Bearer ${"A".repeat(24)}`, request: async () => { calls++; return response(); } }), /Credential/);
+  assert.equal(calls, 0);
+  assert.equal(fs.readFileSync(path.join(root, "receipt.json"), "utf8"), before);
+});
+
+test("acceptance binds current inputs and export cannot carry stale accepted bytes", async (t) => {
+  const root = job(t);
+  await runJob(root, { request: response });
+  fs.appendFileSync(path.join(root, "mission.md"), "\nChanged decision\n");
+  assert.throws(() => acceptDraft(root, "Reviewed"), /Inputs changed/i);
+  fs.writeFileSync(path.join(root, "mission.md"), fs.readFileSync(new URL("../scripts/brief-templates/mission.md", import.meta.url)));
+  acceptDraft(root, "Reviewed");
+  fs.appendFileSync(path.join(root, "draft.md"), "\nUnreviewed change\n");
+  assert.throws(() => exportJob(root, path.join(temporary(t), "bundle.json")), /acceptance|accepted/i);
+  assert.equal(acceptDraft(root, "Reviewed changed draft").status, "accepted");
+  assert.equal(exportJob(root, path.join(temporary(t), "bundle.json")).files, 5);
+});
+
+test("truncated provider output preserves usage and requires human review", async (t) => {
+  const root = job(t);
+  const result = await runJob(root, { request: async () => ({ ...await response(), finishReason: "length" }) });
+  assert.equal(result.status, "needs_review");
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, "receipt.json"), "utf8"));
+  assert.equal(receipt.attempts[0].finishReason, "length");
+  assert.equal(receipt.attempts[0].usage.totalTokens, 52);
+});
+
+test("provider transport is bounded and omits model-specific sampling parameters", async (t) => {
+  const originalKey = process.env.OPENAI_API_KEY;
+  const originalModel = process.env.EVIDENCE_BRIEF_MODEL;
+  process.env.OPENAI_API_KEY = "fixture-key";
+  process.env.EVIDENCE_BRIEF_MODEL = "fixture-model";
+  t.after(() => {
+    if (originalKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = originalKey;
+    if (originalModel === undefined) delete process.env.EVIDENCE_BRIEF_MODEL; else process.env.EVIDENCE_BRIEF_MODEL = originalModel;
+  });
+  let cancelled = false;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.equal(url, "https://api.openai.com/v1/chat/completions");
+    assert.equal("temperature" in JSON.parse(options.body), false);
+    return new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(128 * 1024)); },
+      cancel() { cancelled = true; },
+    }));
+  });
+  await assert.rejects(requestOpenAI("fixture", new AbortController().signal), /transport limit/);
+  assert.equal(cancelled, true);
+});
+
+test("a pre-cancelled job never invokes the provider and records cancellation", async (t) => {
+  const root = job(t);
+  let calls = 0;
+  assert.equal((await runJob(root, { signal: AbortSignal.abort(), request: async () => { calls++; return response(); } })).status, "cancelled");
+  assert.equal(calls, 0);
+  assert.equal(fs.existsSync(path.join(root, ".brief-run.lock")), false);
+});
+
+test("SIGKILL after publishing a draft preserves it for explicit recovery without another provider request", async (t) => {
+  const root = job(t);
+  const script = `import fs from 'node:fs';
+    import {runJob} from './scripts/evidence-brief.js';
+    const link = fs.linkSync;
+    fs.linkSync = (from, to) => { link(from, to); if (to.endsWith('/draft.md')) process.kill(process.pid, 'SIGKILL'); };
+    await runJob(process.argv[1], {request: async () => ({content: 'Surviving evidence [S1].'})});`;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script, root], { encoding: "utf8" });
+  assert.equal(child.signal, "SIGKILL");
+  assert.equal(fs.existsSync(path.join(root, ".brief-run.lock")), true);
+  assert.throws(() => recoverDraft(root, "Stopped"), /locked/);
+  // The child has exited; simulate the operator's explicitly verified stale-lock removal.
+  fs.unlinkSync(path.join(root, ".brief-run.lock"));
+  let calls = 0;
+  await assert.rejects(runJob(root, { retry: true, intervention: "Stopped", request: async () => { calls++; return response(); } }), /use recover/);
+  assert.equal(calls, 0);
+  assert.equal(recoverDraft(root, "Confirmed killed runner; preserving its draft").status, "needs_review");
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, "receipt.json"), "utf8"));
+  assert.equal(receipt.attempts.length, 1);
+  assert.equal(receipt.humanAcceptance.status, "pending");
+  assert.equal(acceptDraft(root, "Checked surviving draft").status, "accepted");
+  const archive = path.join(temporary(t), "bundle.json");
+  exportJob(root, archive);
+  const restored = path.join(temporary(t), "restored");
+  restoreJob(archive, restored);
+  assert.equal(fs.readFileSync(path.join(restored, "draft.md"), "utf8"), "Surviving evidence [S1].\n");
 });
