@@ -1,0 +1,9 @@
+[
+  {
+    "id": "S1",
+    "title": "Synthetic read-only connector release note",
+    "citation": "fixture:synthetic-read-only-connector",
+    "sourceDate": "2026-10-01",
+    "path": "sources/approved-release.md"
+  }
+]

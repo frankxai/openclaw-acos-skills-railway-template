@@ -4,7 +4,7 @@ Give an agent a useful first job: turn approved sources into an evidence brief y
 
 This is the **Starlight-maintained fork** of [Vignesh N's OpenClaw Railway template](https://github.com/vignesh07/clawdbot-railway-template). The upstream wrapper supplies the password-protected setup wizard, persistent Gateway and backup flow. Starlight adds a versioned evidence briefing workflow, separate personality references and an offline install/export CLI. The original [MIT license](LICENSE) and copyright are preserved; the new pack includes its own MIT notice.
 
-**Status:** implemented with local tests and CI configuration; no Starlight-owned marketplace template, live deployment, paid outcome or current Hermes compatibility is established by this repository. The Dockerfile currently pins OpenClaw `v2026.2.9`; a current-runtime rebase and isolated cloud smoke test remain release gates. This fork is independently maintained, without implied OpenClaw or Railway endorsement.
+**Status:** a reviewable source kit with local tests and an isolated Docker build/smoke; no Starlight-owned marketplace template, live deployment, paid outcome or current Hermes compatibility is established by this repository. The image now pins OpenClaw `v2026.9.8` on Node 24, which satisfies the upstream runtime check. This fork is independently maintained, without implied OpenClaw or Railway endorsement.
 
 ## What you get
 
@@ -54,7 +54,7 @@ Recommended:
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
 
 Optional:
-- `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
+- None. `OPENCLAW_GATEWAY_TOKEN` is required and must be distinct from `SETUP_PASSWORD`; the wrapper will not generate or persist a fallback token.
 
 Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
@@ -67,6 +67,25 @@ Then:
 - Visit `https://<your-app>.up.railway.app/setup`
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
+
+## Run an editable evidence brief
+
+The runtime includes a bounded, no-tools briefing runner. It sends the mission and only the source files named in `sources.json` directly to OpenAI using the customer-owned `OPENAI_API_KEY`; choose a model supported by the customer's account in `EVIDENCE_BRIEF_MODEL`. Set both as deployment environment variables. The runner does not read or write OpenClaw credentials, does not expose a Gateway HTTP endpoint, and cannot publish or invoke agent tools.
+
+```bash
+mkdir -m 700 -p /data/briefs /data/recovered
+node /app/scripts/evidence-brief.js init --job /data/briefs/connector-check
+# Edit mission.md, sources.json, and the approved source files in /data/briefs/connector-check.
+node /app/scripts/evidence-brief.js run --job /data/briefs/connector-check
+# Review and edit draft.md, then explicitly record human acceptance.
+node /app/scripts/evidence-brief.js accept --job /data/briefs/connector-check --note "Reviewed cited claims"
+node /app/scripts/evidence-brief.js export --job /data/briefs/connector-check --output /data/briefs/connector-check-export.json
+node /app/scripts/evidence-brief.js restore --bundle /data/briefs/connector-check-export.json --job /data/recovered/connector-check
+```
+
+`init` installs a clearly labeled synthetic fixture; replace it with approved customer sources before using the brief for a real decision. Source paths must stay inside the private job directory. The run receipt stores input hashes, every attempt, timing, token counts when returned, an explicit unknown USD cost, retry/intervention notes, citation-check results, and human acceptance. An interrupted request is never retried automatically: inspect its receipt, then use `run --retry --intervention "..."` if another model call is authorized. A retry may incur another provider charge. Export is a customer-selected data artifact containing mission, cited source files, draft and receipt; it never reads environment variables or includes the API key. Store exports as private customer data.
+
+This runner is a separate OpenAI Chat Completions adapter, not a claim that the skill was executed by OpenClaw or another provider. Its fixture tests are not live model evaluation. See the [live-verifier packet](docs/LIVE-VERIFIER.md) for exact remaining gates.
 
 ## Support and attribution
 
