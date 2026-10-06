@@ -1,5 +1,4 @@
 import childProcess from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,32 +42,10 @@ const WORKSPACE_DIR =
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
-// Gateway admin token (protects OpenClaw gateway + Control UI).
-// Must be stable across restarts. If not provided via env, persist it in the state dir.
-function resolveGatewayToken() {
-  const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (envTok) return envTok;
-
-  const tokenPath = path.join(STATE_DIR, "gateway.token");
-  try {
-    const existing = fs.readFileSync(tokenPath, "utf8").trim();
-    if (existing) return existing;
-  } catch {
-    // ignore
-  }
-
-  const generated = crypto.randomBytes(32).toString("hex");
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(tokenPath, generated, { encoding: "utf8", mode: 0o600 });
-  } catch {
-    // best-effort
-  }
-  return generated;
-}
-
-const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
-process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
+// Gateway authentication is an independent owner-supplied deployment secret.
+const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+const hasDistinctSetupSecrets = () =>
+  Boolean(SETUP_PASSWORD && OPENCLAW_GATEWAY_TOKEN && SETUP_PASSWORD !== OPENCLAW_GATEWAY_TOKEN);
 
 // Where the gateway will listen internally (we proxy to it).
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
@@ -173,6 +150,7 @@ async function waitForGatewayReady(opts = {}) {
 
 async function startGateway() {
   if (gatewayProc) return;
+  if (!hasDistinctSetupSecrets()) throw new Error("SETUP_PASSWORD and a distinct OPENCLAW_GATEWAY_TOKEN are required");
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -278,6 +256,9 @@ function requireSetupAuth(req, res, next) {
       .type("text/plain")
       .send("SETUP_PASSWORD is not set. Set it in Railway Variables before using /setup.");
   }
+  if (!hasDistinctSetupSecrets()) {
+    return res.status(503).type("text/plain").send("Set distinct SETUP_PASSWORD and OPENCLAW_GATEWAY_TOKEN deployment secrets before using /setup.");
+  }
 
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
@@ -299,8 +280,11 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
-// Minimal health endpoint for Railway.
-app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
+// Health stays public, but does not mark a deployment ready without both secrets.
+app.get("/setup/healthz", (_req, res) => {
+  if (!hasDistinctSetupSecrets()) return res.status(503).json({ ok: false });
+  return res.json({ ok: true });
+});
 
 async function probeGateway() {
   // Don't assume HTTP — the gateway primarily speaks WebSocket.

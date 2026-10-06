@@ -8,9 +8,10 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "lint": "node --check src/server.js && node --check src/setup-app.js && node --check src/agent-packs.js && node --check scripts/agent-pack.js",
+    "lint": "node --check src/server.js && node --check src/setup-app.js && node --check src/agent-packs.js && node --check scripts/agent-pack.js && node --check scripts/evidence-brief.js",
     "test": "node --test",
     "smoke": "node scripts/smoke.js",
+    "brief": "node scripts/evidence-brief.js",
     "pack:verify": "node scripts/agent-pack.js verify",
     "iac:check": "tsc -p tsconfig.iac.json"
   },
