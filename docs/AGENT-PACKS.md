@@ -29,7 +29,7 @@ Current [OpenClaw skill docs](https://docs.openclaw.ai/tools/skills) document wo
 
 ## Release evidence
 
-Local tests exercise export/import equality, idempotency, tamper detection, invalid payloads, conflicting installs and filesystem escape attempts. CI runs tests, syntax checks and Railway SDK type validation on Node 22/24. These checks do not prove research quality, a customer's paid outcome, Gateway security or a functioning cloud deployment.
+Local tests exercise export/import equality, idempotency, tamper detection, invalid payloads, conflicting installs and filesystem escape attempts. CI runs tests, syntax checks and Railway SDK type validation on Node 24. These checks do not prove research quality, a customer's paid outcome, Gateway security or a functioning cloud deployment.
 
 The pack contains `references/evaluation-fixtures.json`: traceable evidence, stale pricing, injected instructions and missing inputs. Its explicit status is `authored-not-model-executed`. Provide these raw cases to the chosen runtime, keep output/traces, evaluate their acceptance criteria and measure usage when reported. Written criteria and installer tests do not prove a model obeys the skill. Stop before selling an outcome that has not been evaluated.
 
