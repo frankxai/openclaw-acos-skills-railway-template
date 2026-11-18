@@ -25,14 +25,12 @@ WORKDIR /openclaw
 ARG OPENCLAW_GIT_REF=v2026.11.5
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
-# Patch: relax version requirements for packages that may reference unpublished versions.
-# Apply to all extension package.json files to handle workspace protocol (workspace:*).
-RUN set -eux; \
-  find ./extensions -name 'package.json' -type f | while read -r f; do \
-    sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*">=[^"]+"/"openclaw": "*"/g' "$f"; \
-    sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
-  done
-
+# No dependency rewrite here. Extensions declare `openclaw` as devDependencies
+# "workspace:*" plus an optional peer ">=<release>", so pnpm links the openclaw built
+# from this same ref. The old sed patch rewrote both to "*", which made pnpm fetch
+# openclaw from npm; upstream's minimumReleaseAge (7 days) then picked an older release
+# without the plugin-sdk exports the extensions import. Pinning a released tag above is
+# what protects against `main` referencing unpublished versions.
 RUN pnpm install --no-frozen-lockfile
 ENV OPENCLAW_PREFER_PNPM=1
 # One layer on purpose: ui:build renames dist/control-ui, and overlayfs returns EXDEV
