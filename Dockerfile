@@ -34,9 +34,10 @@ RUN set -eux; \
   done
 
 RUN pnpm install --no-frozen-lockfile
-RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:install && pnpm ui:build
+# One layer on purpose: ui:build renames dist/control-ui, and overlayfs returns EXDEV
+# when a directory created in an earlier layer is renamed.
+RUN pnpm build && pnpm ui:install && pnpm ui:build
 
 
 # Runtime image
